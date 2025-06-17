@@ -1,0 +1,2002 @@
+19/05/2022 
+13:37
+;; 1. Based on: run16
+;; 2. Description: Minimal PBPK from Jusko - defix plasma - fit cerveau - fd fix
+;; x1. Author: user
+$PROBLEM    PBPK Critically ill patients metronidazole study
+$INPUT      ID TIME TAD TIN CONC=DROP DV LNCO=DROP LNCU=DROP FU AMT II
+            ADDL RATE EVID CMT VDVE QDVE AGE SEX HT WT SALB=DROP
+            SPRO=DROP CRCL DIAG=DROP STUD FLAG
+$DATA      metronidazole_QDVEind.csv IGNORE=#
+$SUBROUTINE ADVAN13 TOL=9
+;$PRIOR      NWPRI NTHETA=12 NETA=6 NTHP=3 NETP=0 NPEXP=1
+$MODEL      NCOMP=7 COMP=(CENTRAL,DEFDOSE) ; 1- Plasma
+            COMP=(RES) ; 2- Rest
+            COMP=(BVAS) ; 3- Brain vasculature
+            COMP=(ECF) ; 4- Extracellular fluid
+            COMP=(MICRO) ; 5- Dialysate
+            COMP=(CSF) ; 6- Cerebrospinal fluid
+            COMP=(DVE) ; 7- DVE
+$PK       
+
+;; --------------------------- Parameters estimated ---------------------------- ;;
+TVKRES   	= THETA(1)
+KRES     	= TVKRES*EXP(ETA(1))
+
+TVCL10   	= THETA(2)
+CL10     	= TVCL10*EXP(ETA(2))
+
+TVfd		= THETA(3)
+fd			= TVfd*EXP(ETA(3))		;fraction of CO for the rest compartment
+
+TVVBLO		= THETA(4)
+VBLO		= TVVBLO*EXP(ETA(4))
+
+TVCO		= THETA(5)
+CO			= TVCO*EXP(ETA(5))
+
+TVPS1     = THETA(6)
+PS1       = TVPS1*EXP(ETA(6))
+
+TVPS2     = THETA(7)
+PS2       = TVPS2*EXP(ETA(7))
+
+
+QCSFOUT = 0
+IF (STUD.EQ.1) QCSFOUT = 0.024
+IF (STUD.EQ.2.AND.QDVE.LT.0.024) QCSFOUT = 0.024-QDVE				;patients LCR
+
+
+
+;; ------------------------- Physiological parameters -------------------------- ;;
+; Volumes:
+VBVAS = 0.0637                            	;; Brain vascular volume L (paper from Ball K)
+;VBLO  = 5.85			                   	;; Blood volume L (Brown et al. Physiological parameter values for physiologically based pharmacokinetic models. Toxicol. Ind. Health 13, 407−84)
+VECF  = 0.24			                   	;; ECF brain tissue volume L (Westerhout et al)
+VVENT = 0.130                            	;; CSF volume L (Gaohua et al, Drug Metabolism and Pharmacokinetics Volume 31, Issue 3, June 2016, Pages 224-233)
+VRES  = WT-(VBLO+VBVAS+VECF+VVENT)			;; Rest volume L
+
+; Blood flows:
+;CO   = 312			             			;; Cardiac output L/h (Brown et al.)
+QBRA = 42				           			;; Brain blood flow L/h (paper from Ball K)
+QRES = fd*CO                    			;; Rest blood flow
+QECF = 0.0105 	                 			;; Bulk flow : flow rate from ECF to CSF (Westerhout et al)
+RBP  = 0.8                         			;; blood/plasma ratio (simcyp predictions)
+
+
+$DES       
+;; ------------------------- Compartment concentrations ----------------------- ;;
+C1 = A(1)/VBLO                                       ;; AMT/Blood  volume
+Cplasma = C1/RBP									 ;; Conc plasma
+C2 = A(2)/VRES                                       ;; AMT/Plasma rest tissue volume
+C3 = A(3)/VBVAS                                      ;; AMT/Brain vascular volume
+C4 = A(4)/VECF                                       ;; AMT/Brain ECF volume
+C5 = A(5)/TIN										 ;; Conc dialysate
+C6 = A(6)/VVENT                                      ;; AMT/CSF ventricle volume
+C7 = A(7)/(VDVE+0.000001)							 ;; Conc dve
+;; -------------------------- Differential equations -------------------------- ;;
+DADT(1)= (C2*QRES/KRES) + C3*QBRA - C1*(QRES+CL10+QBRA)
+DADT(2)= (C1*QRES) - (C2*QRES/KRES)
+
+DADT(3)= (C1-C3)*QBRA + C4*PS1 + C6*(PS2+QCSFOUT) - C3*(PS1+PS2)
+
+DADT(4)=  C3*PS1 - C4*(PS1+QECF)
+DADT(5) = C4
+
+DADT(6)=  C3*PS2 + (C4*QECF) - C6*(QCSFOUT+PS2) - C6*QDVE
+DADT(7)=  C6*QDVE
+
+
+$ERROR       
+
+AA1 = A(1)			;; AMT/Plasma
+AA2 = A(2)			;; AMT/Rest
+AA3 = A(3)			;; AMT/Brain vasculature
+AA4 = A(4)			;; AMT/ECFV
+AA5 = A(5)			;; AMT/ECFI
+AA6 = A(6)			;; AMT/CSF
+AA7 = A(7)			;; AMT/DVE
+
+	IPRED = A(1)/(VBLO*RBP)
+		IF(CMT.EQ.5)    IPRED = (A(5)/TIN)
+		IF(CMT.EQ.7)    IPRED = (A(7)/(VDVE+0.000001))
+
+	W = SQRT(SIGMA(1)*IPRED**2 + SIGMA(2))
+		IF(CMT.EQ.5)    W = SQRT(SIGMA(3)*IPRED**2)
+		IF(CMT.EQ.7)    W = SQRT(SIGMA(4)*IPRED**2)
+		IF(W.EQ.0) 		W = 1 
+
+	IRES  = DV-IPRED
+    IWRES = IRES/W 
+      
+    RESV = EPS(1)
+    IF(CMT.EQ.5) RESV = EPS(3)
+    IF(CMT.EQ.7) RESV = EPS(4)
+	
+	RESV2 = 0
+    IF(CMT.EQ.1) RESV2 = EPS(2)
+  
+            
+     Y = IPRED + IPRED*RESV + RESV2      
+
+
+;; ------------------------- Initial estimates THETA -------------------------- ;;
+$THETA  (0,0.796,1) ; 1 ~KRES
+ (0,7.28,100) ; 2 ~CL10
+ (0,0.86,1) FIX ; 3 ~fd
+ 5.85 FIX ; 4 ~VBLO
+ 312 FIX ; 5 ~CO
+ (0,6.4) FIX ; 6 ~PS1
+ (0,3.2) FIX ; 7 ~PS2
+$OMEGA  0  FIX  ;  1 ~IIV_Kp
+$OMEGA  0.124  ; 2 ~IIV_CL10
+$OMEGA  0  FIX  ;  3 ~IIV_fd
+$OMEGA  0  FIX  ; 4 ~IIV_VBLO
+$OMEGA  0  FIX  ;  5 ~IIV_CO
+$OMEGA  0  FIX  ; 6 ~IIV_PS1
+$OMEGA  0  FIX  ; 7 ~IIV_PS2
+;; --------------------------- Initial estimates SIGMA ------------------------- ;;
+$SIGMA  0.0207  ; 1 ~Plasma Prop RES_ERR
+$SIGMA  1.18  ; 2 ~Plasma Add RES_ERR
+$SIGMA  0.0517  ; 3 ~ECF Prop RES_ERR
+$SIGMA  0.079  ; 4 ~DVE Prop RES_ERR
+$ESTIMATION METHOD=1 INTER PRINT=1 MAX=9999 POSTHOC NOABORT
+$COVARIANCE PRINT=E
+$TABLE      ID TIME TAD TIN EVID CMT FLAG DV PRED IPRED IRES WRES
+            IWRES CWRES NOPRINT ONEHEADER FILE=sdtab22
+;$TABLE ID AGE HT WT SALB SPRO CRCL NOPRINT ONEHEADER NOAPPEND FILE=cotab22
+
+;$TABLE ID SEX DIAG STUD NOPRINT ONEHEADER NOAPPEND FILE=catab22
+$TABLE      ID TIME TAD TIN EVID CMT KRES CL10 fd VDVE NOPRINT
+            ONEHEADER NOAPPEND FILE=patab22
+$TABLE      ID TIME TAD CMT EVID C1 Cplasma C2 C3 C4 C5 C6 C7 NOPRINT
+            ONEHEADER FILE=mytab22
+
+  
+NM-TRAN MESSAGES 
+  
+ WARNINGS AND ERRORS (IF ANY) FOR PROBLEM    1
+             
+ (WARNING  2) NM-TRAN INFERS THAT THE DATA ARE POPULATION.
+             
+ (WARNING  48) DES-DEFINED ITEMS ARE COMPUTED ONLY WHEN EVENT TIME
+ INCREASES. E.G., DISPLAYED VALUES ASSOCIATED WITH THE FIRST EVENT RECORD
+ OF AN INDIVIDUAL RECORD ARE COMPUTED WITH (THE LAST ADVANCE TO) AN EVENT
+ TIME OF THE PRIOR INDIVIDUAL RECORD.
+             
+ (WARNING  79) SIGMA IS USED ON THE RIGHT. WITH A SUBSEQUENT RUN, IF AN
+ INITIAL ESTIMATE OF A DIAGONAL BLOCK OF SIGMA IS TO BE COMPUTED BY
+ NONMEM, THAT BLOCK WILL BE SET TO AN IDENTITY MATRIX DURING THAT
+ COMPUTATION. THIS COULD LEAD TO AN ARITHMETIC EXCEPTION.*
+
+ * THE MAXIMUM NUMBER OF WARNINGS OF ONE OR MORE TYPES WAS REACHED.
+ IT IS POSSIBLE THAT SOME WARNING MESSAGES WERE SUPPRESSED.
+  
+License Registered to: CHU Poitiers INSERM U1070
+Expiration Date:    14 MAR 2023
+Current Date:       19 MAY 2022
+Days until program expires : 300
+1NONLINEAR MIXED EFFECTS MODEL PROGRAM (NONMEM) VERSION 7.4.3
+ ORIGINALLY DEVELOPED BY STUART BEAL, LEWIS SHEINER, AND ALISON BOECKMANN
+ CURRENT DEVELOPERS ARE ROBERT BAUER, ICON DEVELOPMENT SOLUTIONS,
+ AND ALISON BOECKMANN. IMPLEMENTATION, EFFICIENCY, AND STANDARDIZATION
+ PERFORMED BY NOUS INFOSYSTEMS.
+
+ PROBLEM NO.:         1
+ PBPK Critically ill patients metronidazole study
+0DATA CHECKOUT RUN:              NO
+ DATA SET LOCATED ON UNIT NO.:    2
+ THIS UNIT TO BE REWOUND:        NO
+ NO. OF DATA RECS IN DATA SET:      380
+ NO. OF DATA ITEMS IN DATA SET:  22
+ ID DATA ITEM IS DATA ITEM NO.:   1
+ DEP VARIABLE IS DATA ITEM NO.:   5
+ MDV DATA ITEM IS DATA ITEM NO.: 22
+0INDICES PASSED TO SUBROUTINE PRED:
+  11   2   7  10   0   8  12   0   0   0   9
+0LABELS FOR DATA ITEMS:
+ ID TIME TAD TIN DV FU AMT II ADDL RATE EVID CMT VDVE QDVE AGE SEX HT WT CRCL STUD FLAG MDV
+0(NONBLANK) LABELS FOR PRED-DEFINED ITEMS:
+ KRES CL10 fd C1 Cplasma C2 C3 C4 C5 C6 C7 IPRED IRES IWRES
+0FORMAT FOR DATA:
+ (2(9E8.0/),3E8.0,1F2.0)
+
+ TOT. NO. OF OBS RECS:      168
+ TOT. NO. OF INDIVIDUALS:        8
+0LENGTH OF THETA:   7
+0DEFAULT THETA BOUNDARY TEST OMITTED:    NO
+0OMEGA HAS BLOCK FORM:
+  1
+  0  2
+  0  0  3
+  0  0  0  4
+  0  0  0  0  5
+  0  0  0  0  0  6
+  0  0  0  0  0  0  7
+0DEFAULT OMEGA BOUNDARY TEST OMITTED:    NO
+0SIGMA HAS SIMPLE DIAGONAL FORM WITH DIMENSION:   4
+0DEFAULT SIGMA BOUNDARY TEST OMITTED:    NO
+0INITIAL ESTIMATE OF THETA:
+ LOWER BOUND    INITIAL EST    UPPER BOUND
+  0.0000E+00     0.7960E+00     0.1000E+01
+  0.0000E+00     0.7280E+01     0.1000E+03
+  0.8600E+00     0.8600E+00     0.8600E+00
+  0.5850E+01     0.5850E+01     0.5850E+01
+  0.3120E+03     0.3120E+03     0.3120E+03
+  0.6400E+01     0.6400E+01     0.6400E+01
+  0.3200E+01     0.3200E+01     0.3200E+01
+0INITIAL ESTIMATE OF OMEGA:
+ BLOCK SET NO.   BLOCK                                                                    FIXED
+        1                                                                                  YES
+                  0.0000E+00
+        2                                                                                   NO
+                  0.1240E+00
+        3                                                                                  YES
+                  0.0000E+00
+        4                                                                                  YES
+                  0.0000E+00
+        5                                                                                  YES
+                  0.0000E+00
+        6                                                                                  YES
+                  0.0000E+00
+        7                                                                                  YES
+                  0.0000E+00
+0INITIAL ESTIMATE OF SIGMA:
+ 0.2070E-01
+ 0.0000E+00   0.1180E+01
+ 0.0000E+00   0.0000E+00   0.5170E-01
+ 0.0000E+00   0.0000E+00   0.0000E+00   0.7900E-01
+0COVARIANCE STEP OMITTED:        NO
+ EIGENVLS. PRINTED:             YES
+ SPECIAL COMPUTATION:            NO
+ COMPRESSED FORMAT:              NO
+ GRADIENT METHOD USED:     NOSLOW
+ SIGDIGITS ETAHAT (SIGLO):                  -1
+ SIGDIGITS GRADIENTS (SIGL):                -1
+ EXCLUDE COV FOR FOCE (NOFCOV):              NO
+ TURN OFF Cholesky Transposition of R Matrix (CHOLROFF): NO
+ KNUTHSUMOFF:                                -1
+ RESUME COV ANALYSIS (RESUME):               NO
+ SIR SAMPLE SIZE (SIRSAMPLE):              -1
+ NON-LINEARLY TRANSFORM THETAS DURING COV (THBND): 1
+ PRECONDTIONING CYCLES (PRECOND):        0
+ PRECONDTIONING TYPES (PRECONDS):        TOS
+ FORCED PRECONDTIONING CYCLES (PFCOND):0
+ PRECONDTIONING TYPE (PRETYPE):        0
+ FORCED POS. DEFINITE SETTING: (FPOSDEF):0
+0TABLES STEP OMITTED:    NO
+ NO. OF TABLES:           3
+ SEED NUMBER (SEED):    11456
+ RANMETHOD:             3U
+ MC SAMPLES (ESAMPLE):    300
+ WRES SQUARE ROOT TYPE (WRESCHOL): EIGENVALUE
+0-- TABLE   1 --
+0RECORDS ONLY:    ALL
+04 COLUMNS APPENDED:    YES
+ PRINTED:                NO
+ HEADER:                YES
+ FILE TO BE FORWARDED:   NO
+ FORMAT:                S1PE11.4
+ LFORMAT:
+ RFORMAT:
+ FIXED_EFFECT_ETAS:
+0USER-CHOSEN ITEMS:
+ ID TIME TAD TIN EVID CMT FLAG DV IPRED IRES IWRES CWRES
+0-- TABLE   2 --
+0RECORDS ONLY:    ALL
+04 COLUMNS APPENDED:    NO
+ PRINTED:                NO
+ HEADER:                YES
+ FILE TO BE FORWARDED:   NO
+ FORMAT:                S1PE11.4
+ LFORMAT:
+ RFORMAT:
+ FIXED_EFFECT_ETAS:
+0USER-CHOSEN ITEMS:
+ ID TIME TAD TIN EVID CMT KRES CL10 fd VDVE
+0-- TABLE   3 --
+0RECORDS ONLY:    ALL
+04 COLUMNS APPENDED:    YES
+ PRINTED:                NO
+ HEADER:                YES
+ FILE TO BE FORWARDED:   NO
+ FORMAT:                S1PE11.4
+ LFORMAT:
+ RFORMAT:
+ FIXED_EFFECT_ETAS:
+0USER-CHOSEN ITEMS:
+ ID TIME TAD CMT EVID C1 Cplasma C2 C3 C4 C5 C6 C7
+1DOUBLE PRECISION PREDPP VERSION 7.4.3
+
+ GENERAL NONLINEAR KINETICS MODEL WITH STIFF/NONSTIFF EQUATIONS (LSODA, ADVAN13)
+0MODEL SUBROUTINE USER-SUPPLIED - ID NO. 9999
+0MAXIMUM NO. OF BASIC PK PARAMETERS:  14
+0COMPARTMENT ATTRIBUTES
+ COMPT. NO.   FUNCTION   INITIAL    ON/OFF      DOSE      DEFAULT    DEFAULT
+                         STATUS     ALLOWED    ALLOWED    FOR DOSE   FOR OBS.
+    1         CENTRAL      ON         YES        YES        YES        YES
+    2         RES          ON         YES        YES        NO         NO
+    3         BVAS         ON         YES        YES        NO         NO
+    4         ECF          ON         YES        YES        NO         NO
+    5         MICRO        ON         YES        YES        NO         NO
+    6         CSF          ON         YES        YES        NO         NO
+    7         DVE          ON         YES        YES        NO         NO
+    8         OUTPUT       OFF        YES        NO         NO         NO
+ INITIAL (BASE) TOLERANCE SETTINGS:
+ NRD (RELATIVE) VALUE(S) OF TOLERANCE:   9
+ ANRD (ABSOLUTE) VALUE(S) OF TOLERANCE:  12
+1
+ ADDITIONAL PK PARAMETERS - ASSIGNMENT OF ROWS IN GG
+ COMPT. NO.                             INDICES
+              SCALE      BIOAVAIL.   ZERO-ORDER  ZERO-ORDER  ABSORB
+                         FRACTION    RATE        DURATION    LAG
+    1            *           *           *           *           *
+    2            *           *           *           *           *
+    3            *           *           *           *           *
+    4            *           *           *           *           *
+    5            *           *           *           *           *
+    6            *           *           *           *           *
+    7            *           *           *           *           *
+    8            *           -           -           -           -
+             - PARAMETER IS NOT ALLOWED FOR THIS MODEL
+             * PARAMETER IS NOT SUPPLIED BY PK SUBROUTINE;
+               WILL DEFAULT TO ONE IF APPLICABLE
+0DATA ITEM INDICES USED BY PRED ARE:
+   EVENT ID DATA ITEM IS DATA ITEM NO.:     11
+   TIME DATA ITEM IS DATA ITEM NO.:          2
+   DOSE AMOUNT DATA ITEM IS DATA ITEM NO.:   7
+   DOSE RATE DATA ITEM IS DATA ITEM NO.:    10
+   INTERVAL DATA ITEM IS DATA ITEM NO.:      8
+   ADDL. DOSES DATA ITEM IS DATA ITEM NO.:   9
+   COMPT. NO. DATA ITEM IS DATA ITEM NO.:   12
+
+0PK SUBROUTINE CALLED WITH EVERY EVENT RECORD.
+ PK SUBROUTINE NOT CALLED AT NONEVENT (ADDITIONAL OR LAGGED) DOSE TIMES.
+0ERROR SUBROUTINE CALLED WITH EVERY EVENT RECORD.
+0ERROR SUBROUTINE INDICATES THAT DERIVATIVES OF COMPARTMENT AMOUNTS ARE USED.
+0DES SUBROUTINE USES COMPACT STORAGE MODE.
+1
+
+
+ #TBLN:      1
+ #METH: First Order Conditional Estimation with Interaction
+
+ ESTIMATION STEP OMITTED:                 NO
+ ANALYSIS TYPE:                           POPULATION
+ NUMBER OF SADDLE POINT RESET ITERATIONS:      0
+ GRADIENT METHOD USED:               NOSLOW
+ CONDITIONAL ESTIMATES USED:              YES
+ CENTERED ETA:                            NO
+ EPS-ETA INTERACTION:                     YES
+ LAPLACIAN OBJ. FUNC.:                    NO
+ NO. OF FUNCT. EVALS. ALLOWED:            9999
+ NO. OF SIG. FIGURES REQUIRED:            3
+ INTERMEDIATE PRINTOUT:                   YES
+ ESTIMATE OUTPUT TO MSF:                  NO
+ ABORT WITH PRED EXIT CODE 1:             NO
+ IND. OBJ. FUNC. VALUES SORTED:           NO
+ NUMERICAL DERIVATIVE
+       FILE REQUEST (NUMDER):               NONE
+ MAP (ETAHAT) ESTIMATION METHOD (OPTMAP):   0
+ ETA HESSIAN EVALUATION METHOD (ETADER):    0
+ INITIAL ETA FOR MAP ESTIMATION (MCETA):    0
+ SIGDIGITS FOR MAP ESTIMATION (SIGLO):      100
+ GRADIENT SIGDIGITS OF
+       FIXED EFFECTS PARAMETERS (SIGL):     100
+ NOPRIOR SETTING (NOPRIOR):                 OFF
+ NOCOV SETTING (NOCOV):                     OFF
+ DERCONT SETTING (DERCONT):                 OFF
+ FINAL ETA RE-EVALUATION (FNLETA):          ON
+ EXCLUDE NON-INFLUENTIAL (NON-INFL.) ETAS
+       IN SHRINKAGE (ETASTYPE):             NO
+ NON-INFL. ETA CORRECTION (NONINFETA):      OFF
+ RAW OUTPUT FILE (FILE): psn.ext
+ EXCLUDE TITLE (NOTITLE):                   NO
+ EXCLUDE COLUMN LABELS (NOLABEL):           NO
+ FORMAT FOR ADDITIONAL FILES (FORMAT):      S1PE12.5
+ PARAMETER ORDER FOR OUTPUTS (ORDER):       TSOL
+ WISHART PRIOR DF INTERPRETATION (WISHTYPE):0
+ KNUTHSUMOFF:                               0
+ INCLUDE LNTWOPI:                           NO
+ INCLUDE CONSTANT TERM TO PRIOR (PRIORC):   NO
+ INCLUDE CONSTANT TERM TO OMEGA (ETA) (OLNTWOPI):NO
+ ADDITIONAL CONVERGENCE TEST (CTYPE=4)?:    NO
+ EM OR BAYESIAN METHOD USED:                 NONE
+
+ TOLERANCES FOR ESTIMATION/EVALUATION STEP:
+ NRD (RELATIVE) VALUE(S) OF TOLERANCE:   9
+ ANRD (ABSOLUTE) VALUE(S) OF TOLERANCE:  12
+ TOLERANCES FOR COVARIANCE STEP:
+ NRD (RELATIVE) VALUE(S) OF TOLERANCE:   9
+ ANRD (ABSOLUTE) VALUE(S) OF TOLERANCE:  12
+ TOLERANCES FOR TABLE/SCATTER STEP:
+ NRD (RELATIVE) VALUE(S) OF TOLERANCE:   9
+ ANRD (ABSOLUTE) VALUE(S) OF TOLERANCE:  12
+
+ THE FOLLOWING LABELS ARE EQUIVALENT
+ PRED=PREDI
+ RES=RESI
+ WRES=WRESI
+ IWRS=IWRESI
+ IPRD=IPREDI
+ IRS=IRESI
+
+ MONITORING OF SEARCH:
+
+
+0ITERATION NO.:    0    OBJECTIVE VALUE:   452.346755146300        NO. OF FUNC. EVALS.:   8
+ CUMULATIVE NO. OF FUNC. EVALS.:        8
+ NPARAMETR:  7.9600E-01  7.2800E+00  1.2400E-01  2.0700E-02  1.1800E+00  5.1700E-02  7.9000E-02
+ PARAMETER:  1.0000E-01  1.0000E-01  1.0000E-01  1.0000E-01  1.0000E-01  1.0000E-01  1.0000E-01
+ GRADIENT:  -1.7336E-02  3.3198E-01  3.9952E-02  7.0059E-02 -1.8373E-02 -6.9791E-02 -4.1677E-01
+
+0ITERATION NO.:    1    OBJECTIVE VALUE:   452.346264340968        NO. OF FUNC. EVALS.:  12
+ CUMULATIVE NO. OF FUNC. EVALS.:       20
+ NPARAMETR:  7.9602E-01  7.2679E+00  1.2395E-01  2.0684E-02  1.1802E+00  5.1739E-02  7.9357E-02
+ PARAMETER:  1.0009E-01  9.8203E-02  9.9784E-02  9.9621E-02  1.0010E-01  1.0038E-01  1.0226E-01
+ GRADIENT:  -1.9330E-02  6.7653E-02  3.5050E-02  6.9649E-02 -1.5188E-02 -2.4960E-02 -1.5765E-01
+
+0ITERATION NO.:    2    OBJECTIVE VALUE:   452.346222330322        NO. OF FUNC. EVALS.:  10
+ CUMULATIVE NO. OF FUNC. EVALS.:       30
+ NPARAMETR:  7.9603E-01  7.2656E+00  1.2390E-01  2.0670E-02  1.1804E+00  5.1752E-02  7.9482E-02
+ PARAMETER:  1.0019E-01  9.7865E-02  9.9608E-02  9.9273E-02  1.0018E-01  1.0050E-01  1.0304E-01
+ GRADIENT:  -1.8904E-02  9.2497E-02  2.9820E-02  4.5268E-02 -1.8453E-02 -2.3913E-02 -7.3869E-02
+
+0ITERATION NO.:    3    OBJECTIVE VALUE:   452.346222330322        NO. OF FUNC. EVALS.:  19
+ CUMULATIVE NO. OF FUNC. EVALS.:       49
+ NPARAMETR:  7.9603E-01  7.2656E+00  1.2390E-01  2.0670E-02  1.1804E+00  5.1752E-02  7.9482E-02
+ PARAMETER:  1.0019E-01  9.7865E-02  9.9608E-02  9.9273E-02  1.0018E-01  1.0050E-01  1.0304E-01
+ GRADIENT:  -2.0630E-02 -2.6518E-01  2.9820E-02  3.7453E-02 -2.1189E-02 -3.3766E-02 -8.2121E-02
+
+0ITERATION NO.:    4    OBJECTIVE VALUE:   452.345938161521        NO. OF FUNC. EVALS.:  17
+ CUMULATIVE NO. OF FUNC. EVALS.:       66
+ NPARAMETR:  7.9606E-01  7.2801E+00  1.2385E-01  2.0672E-02  1.1810E+00  5.1784E-02  7.9383E-02
+ PARAMETER:  1.0038E-01  1.0001E-01  9.9408E-02  9.9324E-02  1.0044E-01  1.0081E-01  1.0242E-01
+ GRADIENT:  -1.9890E-02 -7.0694E-02  2.2460E-02  5.6784E-02  1.9196E-03 -1.0751E-02 -1.5675E-01
+
+0ITERATION NO.:    5    OBJECTIVE VALUE:   452.345914754180        NO. OF FUNC. EVALS.:  17
+ CUMULATIVE NO. OF FUNC. EVALS.:       83
+ NPARAMETR:  7.9620E-01  7.2798E+00  1.2372E-01  2.0652E-02  1.1813E+00  5.1814E-02  7.9369E-02
+ PARAMETER:  1.0125E-01  9.9971E-02  9.8888E-02  9.8845E-02  1.0054E-01  1.0110E-01  1.0233E-01
+ GRADIENT:  -8.1319E-03 -3.2919E-02  4.6146E-03  1.2954E-02 -5.9266E-03 -1.2783E-03 -1.7684E-01
+
+0ITERATION NO.:    6    OBJECTIVE VALUE:   452.345909233169        NO. OF FUNC. EVALS.:  16
+ CUMULATIVE NO. OF FUNC. EVALS.:       99
+ NPARAMETR:  7.9633E-01  7.2795E+00  1.2365E-01  2.0662E-02  1.1820E+00  5.1838E-02  7.9391E-02
+ PARAMETER:  1.0201E-01  9.9932E-02  9.8580E-02  9.9071E-02  1.0085E-01  1.0134E-01  1.0247E-01
+ GRADIENT:   3.1507E-03 -1.0811E-01 -5.2961E-03  6.6456E-02  2.1135E-02  3.7959E-02 -1.5764E-01
+
+0ITERATION NO.:    7    OBJECTIVE VALUE:   452.345905582307        NO. OF FUNC. EVALS.:  16
+ CUMULATIVE NO. OF FUNC. EVALS.:      115
+ NPARAMETR:  7.9650E-01  7.2803E+00  1.2364E-01  2.0669E-02  1.1824E+00  5.1780E-02  7.9420E-02
+ PARAMETER:  1.0307E-01  1.0005E-01  9.8532E-02  9.9245E-02  1.0101E-01  1.0077E-01  1.0265E-01
+ GRADIENT:   2.7727E-02 -6.7026E-02 -5.7622E-03  8.3271E-02  2.1315E-02 -2.0897E-02 -1.3485E-01
+
+0ITERATION NO.:    8    OBJECTIVE VALUE:   452.345860036019        NO. OF FUNC. EVALS.:  17
+ CUMULATIVE NO. OF FUNC. EVALS.:      132
+ NPARAMETR:  7.9659E-01  7.2819E+00  1.2400E-01  2.0655E-02  1.1826E+00  5.1848E-02  7.9499E-02
+ PARAMETER:  1.0361E-01  1.0029E-01  9.9995E-02  9.8905E-02  1.0108E-01  1.0143E-01  1.0315E-01
+ GRADIENT:   2.9600E-02 -8.6760E-02  3.8939E-02  7.5513E-02  3.0292E-02  2.9972E-02 -8.3123E-02
+
+0ITERATION NO.:    9    OBJECTIVE VALUE:   452.345799522639        NO. OF FUNC. EVALS.:  16
+ CUMULATIVE NO. OF FUNC. EVALS.:      148
+ NPARAMETR:  7.9646E-01  7.2831E+00  1.2387E-01  2.0655E-02  1.1822E+00  5.1861E-02  7.9563E-02
+ PARAMETER:  1.0286E-01  1.0046E-01  9.9473E-02  9.8918E-02  1.0094E-01  1.0155E-01  1.0355E-01
+ GRADIENT:   1.6461E-02 -3.4604E-03  2.3156E-02  7.9172E-02  3.1723E-02  3.8696E-02 -3.9994E-02
+
+0ITERATION NO.:   10    OBJECTIVE VALUE:   452.345772333692        NO. OF FUNC. EVALS.:  16
+ CUMULATIVE NO. OF FUNC. EVALS.:      164
+ NPARAMETR:  7.9634E-01  7.2823E+00  1.2378E-01  2.0630E-02  1.1846E+00  5.1825E-02  7.9603E-02
+ PARAMETER:  1.0209E-01  1.0034E-01  9.9093E-02  9.8313E-02  1.0194E-01  1.0121E-01  1.0380E-01
+ GRADIENT:   3.4362E-03 -1.5723E-02  1.3862E-02  3.3971E-02  4.4335E-02  1.9627E-02 -1.7012E-02
+
+0ITERATION NO.:   11    OBJECTIVE VALUE:   452.345746754519        NO. OF FUNC. EVALS.:  16
+ CUMULATIVE NO. OF FUNC. EVALS.:      180
+ NPARAMETR:  7.9631E-01  7.2817E+00  1.2367E-01  2.0631E-02  1.1821E+00  5.1835E-02  7.9646E-02
+ PARAMETER:  1.0188E-01  1.0026E-01  9.8676E-02  9.8338E-02  1.0087E-01  1.0131E-01  1.0407E-01
+ GRADIENT:  -4.0719E-03 -2.9575E-01 -1.1691E-03  6.2488E-03 -1.2662E-03  2.5757E-02  7.4673E-03
+
+0ITERATION NO.:   12    OBJECTIVE VALUE:   452.345744709348        NO. OF FUNC. EVALS.:  26
+ CUMULATIVE NO. OF FUNC. EVALS.:      206             RESET HESSIAN, TYPE I
+ NPARAMETR:  7.9630E-01  7.2830E+00  1.2366E-01  2.0630E-02  1.1820E+00  5.1822E-02  7.9638E-02
+ PARAMETER:  1.0186E-01  1.0044E-01  9.8641E-02  9.8305E-02  1.0085E-01  1.0118E-01  1.0402E-01
+ GRADIENT:   2.6238E-03  3.5816E-01 -5.0749E-04 -4.7366E-04 -7.8413E-04  5.3430E-04  9.6681E-03
+
+0ITERATION NO.:   13    OBJECTIVE VALUE:   452.345744709348        NO. OF FUNC. EVALS.:  16
+ CUMULATIVE NO. OF FUNC. EVALS.:      222
+ NPARAMETR:  7.9630E-01  7.2830E+00  1.2366E-01  2.0630E-02  1.1820E+00  5.1822E-02  7.9638E-02
+ PARAMETER:  1.0186E-01  1.0044E-01  9.8641E-02  9.8305E-02  1.0085E-01  1.0118E-01  1.0402E-01
+ GRADIENT:   1.0607E-03 -1.2737E-03 -5.0749E-04 -8.2801E-03 -3.5445E-03 -9.3825E-03  1.3464E-03
+
+0ITERATION NO.:   14    OBJECTIVE VALUE:   452.345743474360        NO. OF FUNC. EVALS.:  16
+ CUMULATIVE NO. OF FUNC. EVALS.:      238
+ NPARAMETR:  7.9630E-01  7.2830E+00  1.2366E-01  2.0630E-02  1.1820E+00  5.1843E-02  7.9637E-02
+ PARAMETER:  1.0186E-01  1.0044E-01  9.8644E-02  9.8318E-02  1.0086E-01  1.0138E-01  1.0402E-01
+ GRADIENT:  -9.6791E-04 -1.7777E-03 -1.2791E-03 -7.2147E-04  2.8565E-03  1.3023E-02 -1.8031E-04
+
+0ITERATION NO.:   15    OBJECTIVE VALUE:   452.345743474360        NO. OF FUNC. EVALS.:  16
+ CUMULATIVE NO. OF FUNC. EVALS.:      254
+ NPARAMETR:  7.9630E-01  7.2830E+00  1.2366E-01  2.0630E-02  1.1820E+00  5.1843E-02  7.9637E-02
+ PARAMETER:  1.0186E-01  1.0044E-01  9.8644E-02  9.8318E-02  1.0086E-01  1.0138E-01  1.0402E-01
+ GRADIENT:  -7.1347E-05 -1.2599E-02 -1.5590E-02  2.3793E-03  3.0754E-03  8.0870E-03  2.2404E-03
+
+ #TERM:
+0MINIMIZATION SUCCESSFUL
+ HOWEVER, PROBLEMS OCCURRED WITH THE MINIMIZATION.
+ REGARD THE RESULTS OF THE ESTIMATION STEP CAREFULLY, AND ACCEPT THEM ONLY
+ AFTER CHECKING THAT THE COVARIANCE STEP PRODUCES REASONABLE OUTPUT.
+ NO. OF FUNCTION EVALUATIONS USED:      254
+ NO. OF SIG. DIGITS IN FINAL EST.:  3.1
+
+ ETABAR IS THE ARITHMETIC MEAN OF THE ETA-ESTIMATES,
+ AND THE P-VALUE IS GIVEN FOR THE NULL HYPOTHESIS THAT THE TRUE MEAN IS 0.
+
+ ETABAR:         0.0000E+00 -8.8725E-05  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00
+ SE:             0.0000E+00  1.2315E-01  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00
+ N:                       8           8           8           8           8           8           8
+
+ P VAL.:         1.0000E+00  9.9943E-01  1.0000E+00  1.0000E+00  1.0000E+00  1.0000E+00  1.0000E+00
+
+ ETASHRINKSD(%)  1.0000E+02  1.0000E-10  1.0000E+02  1.0000E+02  1.0000E+02  1.0000E+02  1.0000E+02
+ ETASHRINKVR(%)  1.0000E+02  1.0000E-10  1.0000E+02  1.0000E+02  1.0000E+02  1.0000E+02  1.0000E+02
+ EBVSHRINKSD(%)  0.0000E+00  8.6716E-01  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00
+ EBVSHRINKVR(%)  0.0000E+00  1.7268E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00  0.0000E+00
+ EPSSHRINKSD(%)  2.8285E+00  2.8285E+00  1.9252E+00  1.4274E+00
+ EPSSHRINKVR(%)  5.5769E+00  5.5769E+00  3.8133E+00  2.8343E+00
+
+  
+ TOTAL DATA POINTS NORMALLY DISTRIBUTED (N):          168
+ N*LOG(2PI) CONSTANT TO OBJECTIVE FUNCTION:    308.76334715677001     
+ OBJECTIVE FUNCTION VALUE WITHOUT CONSTANT:    452.34574347436012     
+ OBJECTIVE FUNCTION VALUE WITH CONSTANT:       761.10909063113013     
+ REPORTED OBJECTIVE FUNCTION DOES NOT CONTAIN CONSTANT
+  
+ TOTAL EFFECTIVE ETAS (NIND*NETA):                             8
+  
+ #TERE:
+ Elapsed estimation  time in seconds:   180.42
+ Elapsed covariance  time in seconds:   178.79
+ Elapsed postprocess time in seconds:     2.07
+1
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ ************************************************************************************************************************
+ ********************                                                                                ********************
+ ********************               FIRST ORDER CONDITIONAL ESTIMATION WITH INTERACTION              ********************
+ #OBJT:**************                       MINIMUM VALUE OF OBJECTIVE FUNCTION                      ********************
+ ********************                                                                                ********************
+ ************************************************************************************************************************
+ 
+
+
+
+
+
+ #OBJV:********************************************      452.346       **************************************************
+1
+ ************************************************************************************************************************
+ ********************                                                                                ********************
+ ********************               FIRST ORDER CONDITIONAL ESTIMATION WITH INTERACTION              ********************
+ ********************                             FINAL PARAMETER ESTIMATE                           ********************
+ ********************                                                                                ********************
+ ************************************************************************************************************************
+ 
+
+
+ THETA - VECTOR OF FIXED EFFECTS PARAMETERS   *********
+
+
+         TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7     
+ 
+         7.96E-01  7.28E+00  8.60E-01  5.85E+00  3.12E+02  6.40E+00  3.20E+00
+ 
+
+
+ OMEGA - COV MATRIX FOR RANDOM EFFECTS - ETAS  ********
+
+
+         ETA1      ETA2      ETA3      ETA4      ETA5      ETA6      ETA7     
+ 
+ ETA1
++        0.00E+00
+ 
+ ETA2
++        0.00E+00  1.24E-01
+ 
+ ETA3
++        0.00E+00  0.00E+00  0.00E+00
+ 
+ ETA4
++        0.00E+00  0.00E+00  0.00E+00  0.00E+00
+ 
+ ETA5
++        0.00E+00  0.00E+00  0.00E+00  0.00E+00  0.00E+00
+ 
+ ETA6
++        0.00E+00  0.00E+00  0.00E+00  0.00E+00  0.00E+00  0.00E+00
+ 
+ ETA7
++        0.00E+00  0.00E+00  0.00E+00  0.00E+00  0.00E+00  0.00E+00  0.00E+00
+ 
+
+
+ SIGMA - COV MATRIX FOR RANDOM EFFECTS - EPSILONS  ****
+
+
+         EPS1      EPS2      EPS3      EPS4     
+ 
+ EPS1
++        2.06E-02
+ 
+ EPS2
++        0.00E+00  1.18E+00
+ 
+ EPS3
++        0.00E+00  0.00E+00  5.18E-02
+ 
+ EPS4
++        0.00E+00  0.00E+00  0.00E+00  7.96E-02
+ 
+1
+
+
+ OMEGA - CORR MATRIX FOR RANDOM EFFECTS - ETAS  *******
+
+
+         ETA1      ETA2      ETA3      ETA4      ETA5      ETA6      ETA7     
+ 
+ ETA1
++        0.00E+00
+ 
+ ETA2
++        0.00E+00  3.52E-01
+ 
+ ETA3
++        0.00E+00  0.00E+00  0.00E+00
+ 
+ ETA4
++        0.00E+00  0.00E+00  0.00E+00  0.00E+00
+ 
+ ETA5
++        0.00E+00  0.00E+00  0.00E+00  0.00E+00  0.00E+00
+ 
+ ETA6
++        0.00E+00  0.00E+00  0.00E+00  0.00E+00  0.00E+00  0.00E+00
+ 
+ ETA7
++        0.00E+00  0.00E+00  0.00E+00  0.00E+00  0.00E+00  0.00E+00  0.00E+00
+ 
+
+
+ SIGMA - CORR MATRIX FOR RANDOM EFFECTS - EPSILONS  ***
+
+
+         EPS1      EPS2      EPS3      EPS4     
+ 
+ EPS1
++        1.44E-01
+ 
+ EPS2
++        0.00E+00  1.09E+00
+ 
+ EPS3
++        0.00E+00  0.00E+00  2.28E-01
+ 
+ EPS4
++        0.00E+00  0.00E+00  0.00E+00  2.82E-01
+ 
+1
+ ************************************************************************************************************************
+ ********************                                                                                ********************
+ ********************               FIRST ORDER CONDITIONAL ESTIMATION WITH INTERACTION              ********************
+ ********************                            STANDARD ERROR OF ESTIMATE                          ********************
+ ********************                                                                                ********************
+ ************************************************************************************************************************
+ 
+
+
+ THETA - VECTOR OF FIXED EFFECTS PARAMETERS   *********
+
+
+         TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7     
+ 
+         3.63E-01  4.12E+00 ......... ......... ......... ......... .........
+ 
+
+
+ OMEGA - COV MATRIX FOR RANDOM EFFECTS - ETAS  ********
+
+
+         ETA1      ETA2      ETA3      ETA4      ETA5      ETA6      ETA7     
+ 
+ ETA1
++       .........
+ 
+ ETA2
++       .........  2.25E-01
+ 
+ ETA3
++       ......... ......... .........
+ 
+ ETA4
++       ......... ......... ......... .........
+ 
+ ETA5
++       ......... ......... ......... ......... .........
+ 
+ ETA6
++       ......... ......... ......... ......... ......... .........
+ 
+ ETA7
++       ......... ......... ......... ......... ......... ......... .........
+ 
+
+
+ SIGMA - COV MATRIX FOR RANDOM EFFECTS - EPSILONS  ****
+
+
+         EPS1      EPS2      EPS3      EPS4     
+ 
+ EPS1
++        3.36E-02
+ 
+ EPS2
++       .........  1.62E+00
+ 
+ EPS3
++       ......... .........  1.12E-02
+ 
+ EPS4
++       ......... ......... .........  1.17E-01
+ 
+1
+
+
+ OMEGA - CORR MATRIX FOR RANDOM EFFECTS - ETAS  *******
+
+
+         ETA1      ETA2      ETA3      ETA4      ETA5      ETA6      ETA7     
+ 
+ ETA1
++       .........
+ 
+ ETA2
++       .........  3.19E-01
+ 
+ ETA3
++       ......... ......... .........
+ 
+ ETA4
++       ......... ......... ......... .........
+ 
+ ETA5
++       ......... ......... ......... ......... .........
+ 
+ ETA6
++       ......... ......... ......... ......... ......... .........
+ 
+ ETA7
++       ......... ......... ......... ......... ......... ......... .........
+ 
+
+
+ SIGMA - CORR MATRIX FOR RANDOM EFFECTS - EPSILONS  ***
+
+
+         EPS1      EPS2      EPS3      EPS4     
+ 
+ EPS1
++        1.17E-01
+ 
+ EPS2
++       .........  7.45E-01
+ 
+ EPS3
++       ......... .........  2.45E-02
+ 
+ EPS4
++       ......... ......... .........  2.07E-01
+ 
+1
+ ************************************************************************************************************************
+ ********************                                                                                ********************
+ ********************               FIRST ORDER CONDITIONAL ESTIMATION WITH INTERACTION              ********************
+ ********************                          COVARIANCE MATRIX OF ESTIMATE                         ********************
+ ********************                                                                                ********************
+ ************************************************************************************************************************
+ 
+
+            TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7      OM11      OM12      OM13      OM14      OM15  
+             OM16      OM17      OM22      OM23      OM24      OM25      OM26      OM27      OM33      OM34      OM35      OM36  
+            OM37      OM44      OM45      OM46      OM47      OM55      OM56      OM57      OM66      OM67      OM77      SG11  
+             SG12      SG13      SG14      SG22      SG23      SG24      SG33      SG34      SG44  
+ 
+ TH 1
++        1.31E-01
+ 
+ TH 2
++        1.47E+00  1.70E+01
+ 
+ TH 3
++       ......... ......... .........
+ 
+ TH 4
++       ......... ......... ......... .........
+ 
+ TH 5
++       ......... ......... ......... ......... .........
+ 
+ TH 6
++       ......... ......... ......... ......... ......... .........
+ 
+ TH 7
++       ......... ......... ......... ......... ......... ......... .........
+ 
+ OM11
++       ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM12
++       ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM13
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM14
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM15
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM16
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         .........
+ 
+ OM17
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........
+ 
+ OM22
++        7.85E-02  8.89E-01 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  5.05E-02
+ 
+ OM23
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... .........
+ 
+ OM24
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... .........
+ 
+ OM25
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... .........
+ 
+1
+
+            TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7      OM11      OM12      OM13      OM14      OM15  
+             OM16      OM17      OM22      OM23      OM24      OM25      OM26      OM27      OM33      OM34      OM35      OM36  
+            OM37      OM44      OM45      OM46      OM47      OM55      OM56      OM57      OM66      OM67      OM77      SG11  
+             SG12      SG13      SG14      SG22      SG23      SG24      SG33      SG34      SG44  
+ 
+ OM26
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... .........
+ 
+ OM27
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM33
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM34
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM35
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM36
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM37
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        .........
+ 
+ OM44
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... .........
+ 
+ OM45
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... .........
+ 
+ OM46
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... .........
+ 
+ OM47
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... .........
+ 
+ OM55
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... .........
+ 
+ OM56
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... .........
+ 
+ OM57
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... .........
+ 
+1
+
+            TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7      OM11      OM12      OM13      OM14      OM15  
+             OM16      OM17      OM22      OM23      OM24      OM25      OM26      OM27      OM33      OM34      OM35      OM36  
+            OM37      OM44      OM45      OM46      OM47      OM55      OM56      OM57      OM66      OM67      OM77      SG11  
+             SG12      SG13      SG14      SG22      SG23      SG24      SG33      SG34      SG44  
+ 
+ OM66
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM67
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM77
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ SG11
++        1.17E-02  1.25E-01 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  6.70E-03 ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........  1.13E-03
+ 
+ SG12
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         .........
+ 
+ SG13
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........
+ 
+ SG14
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... .........
+ 
+ SG22
++        5.77E-01  6.55E+00 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  3.59E-01 ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........  4.97E-02
+         ......... ......... .........  2.63E+00
+ 
+ SG23
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... .........
+ 
+ SG24
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... .........
+ 
+1
+
+            TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7      OM11      OM12      OM13      OM14      OM15  
+             OM16      OM17      OM22      OM23      OM24      OM25      OM26      OM27      OM33      OM34      OM35      OM36  
+            OM37      OM44      OM45      OM46      OM47      OM55      OM56      OM57      OM66      OM67      OM77      SG11  
+             SG12      SG13      SG14      SG22      SG23      SG24      SG33      SG34      SG44  
+ 
+ SG33
++        1.92E-03  2.23E-02 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  9.29E-04 ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........  1.68E-04
+         ......... ......... .........  6.44E-03 ......... .........  1.25E-04
+ 
+ SG34
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ SG44
++       -4.22E-02 -4.69E-01 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... -2.54E-02 ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... -3.79E-03
+         ......... ......... ......... -1.86E-01 ......... ......... -5.67E-04 .........  1.36E-02
+ 
+1
+ ************************************************************************************************************************
+ ********************                                                                                ********************
+ ********************               FIRST ORDER CONDITIONAL ESTIMATION WITH INTERACTION              ********************
+ ********************                          CORRELATION MATRIX OF ESTIMATE                        ********************
+ ********************                                                                                ********************
+ ************************************************************************************************************************
+ 
+
+            TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7      OM11      OM12      OM13      OM14      OM15  
+             OM16      OM17      OM22      OM23      OM24      OM25      OM26      OM27      OM33      OM34      OM35      OM36  
+            OM37      OM44      OM45      OM46      OM47      OM55      OM56      OM57      OM66      OM67      OM77      SG11  
+             SG12      SG13      SG14      SG22      SG23      SG24      SG33      SG34      SG44  
+ 
+ TH 1
++        3.63E-01
+ 
+ TH 2
++        9.81E-01  4.12E+00
+ 
+ TH 3
++       ......... ......... .........
+ 
+ TH 4
++       ......... ......... ......... .........
+ 
+ TH 5
++       ......... ......... ......... ......... .........
+ 
+ TH 6
++       ......... ......... ......... ......... ......... .........
+ 
+ TH 7
++       ......... ......... ......... ......... ......... ......... .........
+ 
+ OM11
++       ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM12
++       ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM13
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM14
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM15
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM16
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         .........
+ 
+ OM17
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........
+ 
+ OM22
++        9.64E-01  9.61E-01 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  2.25E-01
+ 
+ OM23
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... .........
+ 
+ OM24
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... .........
+ 
+ OM25
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... .........
+ 
+1
+
+            TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7      OM11      OM12      OM13      OM14      OM15  
+             OM16      OM17      OM22      OM23      OM24      OM25      OM26      OM27      OM33      OM34      OM35      OM36  
+            OM37      OM44      OM45      OM46      OM47      OM55      OM56      OM57      OM66      OM67      OM77      SG11  
+             SG12      SG13      SG14      SG22      SG23      SG24      SG33      SG34      SG44  
+ 
+ OM26
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... .........
+ 
+ OM27
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM33
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM34
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM35
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM36
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM37
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        .........
+ 
+ OM44
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... .........
+ 
+ OM45
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... .........
+ 
+ OM46
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... .........
+ 
+ OM47
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... .........
+ 
+ OM55
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... .........
+ 
+ OM56
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... .........
+ 
+ OM57
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... .........
+ 
+1
+
+            TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7      OM11      OM12      OM13      OM14      OM15  
+             OM16      OM17      OM22      OM23      OM24      OM25      OM26      OM27      OM33      OM34      OM35      OM36  
+            OM37      OM44      OM45      OM46      OM47      OM55      OM56      OM57      OM66      OM67      OM77      SG11  
+             SG12      SG13      SG14      SG22      SG23      SG24      SG33      SG34      SG44  
+ 
+ OM66
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM67
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM77
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ SG11
++        9.64E-01  9.01E-01 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  8.88E-01 ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........  3.36E-02
+ 
+ SG12
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         .........
+ 
+ SG13
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........
+ 
+ SG14
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... .........
+ 
+ SG22
++        9.81E-01  9.81E-01 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  9.85E-01 ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........  9.14E-01
+         ......... ......... .........  1.62E+00
+ 
+ SG23
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... .........
+ 
+ SG24
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... .........
+ 
+1
+
+            TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7      OM11      OM12      OM13      OM14      OM15  
+             OM16      OM17      OM22      OM23      OM24      OM25      OM26      OM27      OM33      OM34      OM35      OM36  
+            OM37      OM44      OM45      OM46      OM47      OM55      OM56      OM57      OM66      OM67      OM77      SG11  
+             SG12      SG13      SG14      SG22      SG23      SG24      SG33      SG34      SG44  
+ 
+ SG33
++        4.73E-01  4.85E-01 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  3.70E-01 ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........  4.47E-01
+         ......... ......... .........  3.56E-01 ......... .........  1.12E-02
+ 
+ SG34
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ SG44
++       -9.98E-01 -9.75E-01 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... -9.69E-01 ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... -9.67E-01
+         ......... ......... ......... -9.86E-01 ......... ......... -4.34E-01 .........  1.17E-01
+ 
+1
+ ************************************************************************************************************************
+ ********************                                                                                ********************
+ ********************               FIRST ORDER CONDITIONAL ESTIMATION WITH INTERACTION              ********************
+ ********************                      INVERSE COVARIANCE MATRIX OF ESTIMATE                     ********************
+ ********************                                                                                ********************
+ ************************************************************************************************************************
+ 
+
+            TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7      OM11      OM12      OM13      OM14      OM15  
+             OM16      OM17      OM22      OM23      OM24      OM25      OM26      OM27      OM33      OM34      OM35      OM36  
+            OM37      OM44      OM45      OM46      OM47      OM55      OM56      OM57      OM66      OM67      OM77      SG11  
+             SG12      SG13      SG14      SG22      SG23      SG24      SG33      SG34      SG44  
+ 
+ TH 1
++        1.08E+05
+ 
+ TH 2
++        1.95E+03  5.14E+01
+ 
+ TH 3
++       ......... ......... .........
+ 
+ TH 4
++       ......... ......... ......... .........
+ 
+ TH 5
++       ......... ......... ......... ......... .........
+ 
+ TH 6
++       ......... ......... ......... ......... ......... .........
+ 
+ TH 7
++       ......... ......... ......... ......... ......... ......... .........
+ 
+ OM11
++       ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM12
++       ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM13
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM14
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM15
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM16
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         .........
+ 
+ OM17
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........
+ 
+ OM22
++        5.90E+04  1.26E+03 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  3.55E+04
+ 
+ OM23
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... .........
+ 
+ OM24
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... .........
+ 
+ OM25
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... .........
+ 
+1
+
+            TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7      OM11      OM12      OM13      OM14      OM15  
+             OM16      OM17      OM22      OM23      OM24      OM25      OM26      OM27      OM33      OM34      OM35      OM36  
+            OM37      OM44      OM45      OM46      OM47      OM55      OM56      OM57      OM66      OM67      OM77      SG11  
+             SG12      SG13      SG14      SG22      SG23      SG24      SG33      SG34      SG44  
+ 
+ OM26
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... .........
+ 
+ OM27
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM33
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM34
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM35
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM36
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM37
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        .........
+ 
+ OM44
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... .........
+ 
+ OM45
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... .........
+ 
+ OM46
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... .........
+ 
+ OM47
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... .........
+ 
+ OM55
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... .........
+ 
+ OM56
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... .........
+ 
+ OM57
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... .........
+ 
+1
+
+            TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7      OM11      OM12      OM13      OM14      OM15  
+             OM16      OM17      OM22      OM23      OM24      OM25      OM26      OM27      OM33      OM34      OM35      OM36  
+            OM37      OM44      OM45      OM46      OM47      OM55      OM56      OM57      OM66      OM67      OM77      SG11  
+             SG12      SG13      SG14      SG22      SG23      SG24      SG33      SG34      SG44  
+ 
+ OM66
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM67
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ OM77
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ SG11
++        1.79E+06  3.73E+04 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  1.05E+06 ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........  3.17E+07
+ 
+ SG12
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         .........
+ 
+ SG13
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........
+ 
+ SG14
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... .........
+ 
+ SG22
++        4.64E+04  9.36E+02 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  2.67E+04 ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........  8.16E+05
+         ......... ......... .........  2.12E+04
+ 
+ SG23
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... .........
+ 
+ SG24
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... .........
+ 
+1
+
+            TH 1      TH 2      TH 3      TH 4      TH 5      TH 6      TH 7      OM11      OM12      OM13      OM14      OM15  
+             OM16      OM17      OM22      OM23      OM24      OM25      OM26      OM27      OM33      OM34      OM35      OM36  
+            OM37      OM44      OM45      OM46      OM47      OM55      OM56      OM57      OM66      OM67      OM77      SG11  
+             SG12      SG13      SG14      SG22      SG23      SG24      SG33      SG34      SG44  
+ 
+ SG33
++        2.75E+05  5.54E+03 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  1.60E+05 ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........  4.93E+06
+         ......... ......... .........  1.28E+05 ......... .........  8.05E+05
+ 
+ SG34
++       ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... ......... ......... ......... ......... ......... ......... .........
+ 
+ SG44
++        1.66E+06  3.36E+04 ......... ......... ......... ......... ......... ......... ......... ......... ......... .........
+         ......... .........  9.56E+05 ......... ......... ......... ......... ......... ......... ......... ......... .........
+        ......... ......... ......... ......... ......... ......... ......... ......... ......... ......... .........  2.90E+07
+         ......... ......... .........  7.48E+05 ......... .........  4.50E+06 .........  2.66E+07
+ 
+1
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ ************************************************************************************************************************
+ ********************                                                                                ********************
+ ********************               FIRST ORDER CONDITIONAL ESTIMATION WITH INTERACTION              ********************
+ ********************                      EIGENVALUES OF COR MATRIX OF ESTIMATE                     ********************
+ ********************                                                                                ********************
+ ************************************************************************************************************************
+ 
+
+             1         2         3         4         5         6         7
+ 
+         2.13E-06  1.14E-03  3.24E-03  3.21E-02  1.38E-01  8.01E-01  6.02E+00
+ 
+0WARNING: IN TABLE   1, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   1, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   2, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        2, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        3, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        4, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW        5, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       10, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       33, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       34, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       35, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       55, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       59, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       74, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW       85, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      105, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      110, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      156, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+0WARNING: IN TABLE   3, ROW      161, PRED-DEFINED ITEM, NUMBER   9
+ IS LARGER THAN  0.3D+39
+ Elapsed finaloutput time in seconds:     0.34
+ #CPUT: Total CPU Time in Seconds,      362.734
+Stop Time: 
+19/05/2022 
+13:43

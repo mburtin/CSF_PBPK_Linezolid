@@ -1,0 +1,62 @@
+DESCRIPTION: PBPK Critically ill patients linezolid study
+
+[LONGITUDINAL]
+input = {VBvas, VBlood, VEcf, VCsf, VRest 		; Volume parameters
+		 CL, QBrain, QEcf, 						; Clearance parameters
+         KRest, PS1, PS2, RBP, CO, fd, 			; Physiological parameters
+         WT, Tin, VDve, QDve, WQDve, STUD}		; Covariates
+
+; For continuous covariate, Monolix seems to use them as regressor
+;WT   = {use = regressor}
+;Tin  = {use = regressor}
+;VDve = {use = regressor}
+;QDve = {use = regressor}
+;STUD = {use = regressor}
+
+PK:
+depot(type = iv, target = CENTRAL)
+
+EQUATION:
+odeType = stiff
+
+;---------- Initial parameters definitions ----------;
+;VRest 		= WT - (VBlood+VBvas+VCsf+VEcf) 	;Rest volume (L)
+QRest		= fd*CO								; Rest blood flow
+
+QCsf_out 	= 0
+
+;if(STUD == 1) 
+;  QCsf_out 	= 0.024
+;elseif(STUD == 2)
+;  QCsf_out 	= 0.024-QDve	;patients LCR
+
+;---------- Initial compartment definitions ----------;
+CENTRAL_0 	= 0 						; 1 - Plasma
+REST_0 		= 0 						; 2 - Rest
+BVAS_0 		= 0 						; 3 - Brain vasculature
+ECF_0 		= 0 						; 4 - Extracellular fluid
+DIAS_0 		= 0 						; 5 - Dialysate
+CSF_0 		= 0 						; 6 - Cerebrospinal fluid
+DVE_0 		= 0 						; 7 - DVE
+
+;----------    Compartment concentration    ----------;
+C1 			= CENTRAL/VBlood            ; AMT/Blood  volume
+;Cplasma 	= C1/RBP					; Conc plasma - unused
+C2 			= REST/VRest                ; AMT/Plasma rest tissue volume
+C3 			= BVAS/VBvas                ; AMT/Brain vascular volume
+C4 			= ECF/VEcf                 	; AMT/Brain ECF volume
+C5 			= DIAS/Tin					; Conc dialysate
+C6 			= CSF/VCsf                	; AMT/CSF ventricle volume
+C7 			= DVE/(VDve + 0.000001)		; Conc dve
+
+;----------      Differential equations     ----------;
+ddt_CENTRAL = C2*QRest/KRest + C3*QBrain - C1*(QRest+CL+QBrain)
+ddt_REST 	= C1*QRest - C2*QRest/KRest
+ddt_BVAS 	= (C1-C3)*QBrain + C4*PS1 + C6*(PS2+QCsf_out) - C3*(PS1+PS2)
+ddt_ECF 	= C3*PS1 - C4*(PS1+QEcf)
+ddt_DIAS 	= C4
+ddt_CSF 	= C3*PS2 + C4*QEcf - C6*(QCsf_out+PS2) - C6*QDve
+ddt_DVE 	= C6*QDve
+
+OUTPUT:
+output = {C1, C6, C4}
