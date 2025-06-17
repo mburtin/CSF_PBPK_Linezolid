@@ -1,16 +1,16 @@
 DESCRIPTION: PBPK Critically ill patients linezolid study
 
 [LONGITUDINAL]
-input = {VBvas, VBlood, VEcf, VCsf, VRest 		; Volume parameters
+input = {VBvas, VBlood, VEcf, VCsf		 		; Volume parameters
 		 CL, QBrain, QEcf, 						; Clearance parameters
          KRest, PS1, PS2, RBP, CO, fd, 			; Physiological parameters
          WT, Tin, VDve, QDve, WQDve, STUD}		; Covariates
 
 ; For continuous covariate, Monolix seems to use them as regressor
-;WT   = {use = regressor}
-;Tin  = {use = regressor}
-;VDve = {use = regressor}
-;QDve = {use = regressor}
+WT   = {use = regressor}
+Tin  = {use = regressor}
+VDve = {use = regressor}
+QDve = {use = regressor}
 ;STUD = {use = regressor}
 
 PK:
@@ -20,15 +20,16 @@ EQUATION:
 odeType = stiff
 
 ;---------- Initial parameters definitions ----------;
-;VRest 		= WT - (VBlood+VBvas+VCsf+VEcf) 	;Rest volume (L)
+VRest 		= WT - (VBlood+VBvas+VCsf+VEcf) 	;Rest volume (L)
 QRest		= fd*CO								; Rest blood flow
 
 QCsf_out 	= 0
 
-;if(STUD == 1) 
-;  QCsf_out 	= 0.024
-;elseif(STUD == 2)
-;  QCsf_out 	= 0.024-QDve	;patients LCR
+if(STUD == 1) 
+  QCsf_out 	= 0.024
+elseif(STUD == 2)
+  QCsf_out 	= 0.024-QDve	;patients LCR
+end
 
 ;---------- Initial compartment definitions ----------;
 CENTRAL_0 	= 0 						; 1 - Plasma
