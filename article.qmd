@@ -1,0 +1,14 @@
+---
+title: Minimalist PBPK Model to Characterize CNS Distribution of Linezolid
+authors:
+  - name: Michael Burtin
+    affiliation: Université de Poitiers
+  - name: Alexia Chauzy
+    affiliation: Université de Poitiers
+bibliography: references.bib
+project: .
+execute-dir: project
+---
+
+## Section
+This is a simple placeholder for the manuscript's main document [@knuth84].

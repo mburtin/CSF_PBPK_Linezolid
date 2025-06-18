@@ -1,2 +1,5 @@
+/.quarto/
+/_manuscript
 /workspace
 .Rproj.user
+.DS_Store
