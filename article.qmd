@@ -2,8 +2,12 @@
 title: Minimalist PBPK Model to Characterize CNS Distribution of Linezolid
 authors:
   - name: Michael Burtin
+    orcid: 0009-0009-5338-3213
+    email: michael.burtin@univ-poitiers.fr
     affiliation: Université de Poitiers
   - name: Alexia Chauzy
+    orcid: 0000-0001-6443-5888
+    email: alexia.chauzy@univ-poitiers.fr
     affiliation: Université de Poitiers
 bibliography: references.bib
 project: .
