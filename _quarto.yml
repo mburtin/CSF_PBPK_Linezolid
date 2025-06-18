@@ -3,6 +3,7 @@ project:
 
 manuscript:
   article: article.qmd
+  code-links: repo
 
 format:
   html:
@@ -10,9 +11,7 @@ format:
       hypothesis: true
   docx: default
   jats: default
-
-  # (other formats)
-  # pdf: default
+  pdf: default
 
 execute:
   freeze: true
