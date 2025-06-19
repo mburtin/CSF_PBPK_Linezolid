@@ -10,7 +10,7 @@ authors:
     email: alexia.chauzy@univ-poitiers.fr
     affiliation: Université de Poitiers
 bibliography: references.bib
-project: .
+project: ..
 execute-dir: project
 ---
 
